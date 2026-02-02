@@ -1,0 +1,27 @@
+Package: actionTypesR
+Type: Package
+Title: Action Orchestration and Submission Lifecycle Engine
+Version: 0.1.0
+Authors@R: c(
+    person("OpenAI", "Codex", role = c("aut", "cre"), email = "noreply@example.com")
+  )
+Description: Execute ontology-defined actions through resolution, validation,
+    dispatch, and logging across R, SQL, HTTP, and plugin backends.
+License: MIT + file LICENSE
+Depends:
+    R (>= 3.6),
+    ontologySpecR
+Imports:
+    DBI,
+    jsonlite,
+    rlang
+Suggests:
+    duckdb,
+    httr2,
+    testthat (>= 3.0.0),
+    knitr,
+    rmarkdown
+Encoding: UTF-8
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.2.3
+VignetteBuilder: knitr
