@@ -54,13 +54,13 @@ submit_action <- function(ctx, action_type_id, params, target_ids = NULL, .dry_r
     list(
       submission_id = submission_id,
       action_type_id = action_type_id,
-      params_json = jsonlite::toJSON(params, auto_unbox = TRUE),
-      target_ids_json = jsonlite::toJSON(target_ids, auto_unbox = TRUE),
+      params_json = jsonlite::toJSON(params %||% list(), auto_unbox = TRUE),
+      target_ids_json = jsonlite::toJSON(target_ids %||% list(), auto_unbox = TRUE),
       status = status,
-      error_message = error_message,
+      error_message = na_if_null(error_message, NA_character_),
       submitted_at = submitted_at,
-      completed_at = completed_at,
-      submitted_by = Sys.info()[["user"]] %||% NA_character_
+      completed_at = na_if_null(completed_at, NA),
+      submitted_by = na_if_null(Sys.info()[["user"]], NA_character_)
     )
   )
 

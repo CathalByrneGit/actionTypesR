@@ -14,6 +14,14 @@ validate_params <- function(ctx, action_type_id, params) {
   required_ids <- vapply(param_defs, function(def) isTRUE(def$required), logical(1))
   required_params <- param_ids[required_ids]
 
+  unknown_params <- setdiff(names(params), param_ids)
+  if (length(unknown_params) > 0) {
+    rlang::abort(paste0(
+      "Unknown parameter(s) for ", action_type_id, ": ",
+      paste(unknown_params, collapse = ", ")
+    ))
+  }
+
   missing_params <- required_params[!required_params %in% names(params)]
   null_required <- required_params[vapply(required_params, function(id) is.null(params[[id]]), logical(1))]
   missing_params <- unique(c(missing_params, null_required))
@@ -21,14 +29,6 @@ validate_params <- function(ctx, action_type_id, params) {
     rlang::abort(paste0(
       "Required parameter(s) missing for ", action_type_id, ": ",
       paste(missing_params, collapse = ", ")
-    ))
-  }
-
-  unknown_params <- setdiff(names(params), param_ids)
-  if (length(unknown_params) > 0) {
-    rlang::abort(paste0(
-      "Unknown parameter(s) for ", action_type_id, ": ",
-      paste(unknown_params, collapse = ", ")
     ))
   }
 

@@ -45,6 +45,13 @@ generate_uuid <- function() {
   paste0(format(Sys.time(), "%Y%m%d%H%M%S"), "-", sample(100000:999999, 1))
 }
 
+na_if_null <- function(value, default = NA) {
+  if (is.null(value)) {
+    return(default)
+  }
+  value
+}
+
 as_action_plan <- function(action_type, params, target_ids) {
   list(
     action_type_id = get_action_id(action_type),
