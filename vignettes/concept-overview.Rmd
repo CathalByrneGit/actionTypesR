@@ -1,0 +1,158 @@
+---
+title: "Action execution lifecycle"
+output: rmarkdown::html_vignette
+vignette: >
+  %\VignetteIndexEntry{Action execution lifecycle}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup}
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+```
+
+## Overview
+
+`actionTypesR` turns ontology action definitions into real executions. Each submission
+moves through the lifecycle: **resolve → validate → execute → record**.
+
+This vignette uses the aviation demo bundle from `ontologySpecR` and an in-memory
+DuckDB database to show the full flow.
+
+## Setup
+
+```{r}
+library(ontologySpecR)
+library(actionTypesR)
+
+bundle <- read_bundle(system.file("examples", "aviation-demo.json", package = "ontologySpecR"))
+con <- DBI::dbConnect(duckdb::duckdb())
+
+DBI::dbWriteTable(con, "airports", data.frame(
+  airport_id = c("DUB", "JFK"),
+  name = c("Dublin", "John F Kennedy"),
+  country = c("Ireland", "USA"),
+  status = c("active", "active"),
+  latitude = c(53.4213, 40.6413),
+  longitude = c(-6.2701, -73.7781),
+  stringsAsFactors = FALSE
+))
+```
+
+## Register handlers
+
+The aviation bundle includes `UpdateAirportStatus`, which is implemented in R. We can
+register a handler directly in the context.
+
+```{r}
+ctx <- action_context(bundle, con)
+
+ctx <- register_handler(ctx, "UpdateAirportStatus", function(conn, action, params, target_ids) {
+  DBI::dbExecute(conn,
+    "UPDATE airports SET status = ? WHERE airport_id = ?",
+    params = list(params$new_status, target_ids[[1]])
+  )
+})
+```
+
+We can also add a new action that creates flight routes.
+
+```{r}
+create_route_action <- action_type(
+  id = "CreateFlightRoute",
+  targets = c("Airport"),
+  parameters = list(
+    parameter_def(id = "route_id", type = "string", required = TRUE),
+    parameter_def(id = "origin", type = "string", required = TRUE),
+    parameter_def(id = "destination", type = "string", required = TRUE),
+    parameter_def(id = "status", type = "string", required = TRUE)
+  ),
+  effects = list(effect_def(kind = "create", object_type_id = "FlightRoute", notes = "")),
+  impl_kind = "r",
+  impl_entrypoint = "create_flight_route",
+  policy = list(),
+  extensions = list()
+)
+
+bundle$actions <- c(bundle$actions, list(create_route_action))
+ctx <- action_context(bundle, con)
+
+DBI::dbExecute(con, "CREATE TABLE routes (route_id TEXT, origin TEXT, destination TEXT, status TEXT)")
+
+ctx <- register_handler(ctx, "CreateFlightRoute", function(conn, action, params, target_ids) {
+  DBI::dbExecute(conn,
+    "INSERT INTO routes (route_id, origin, destination, status) VALUES (?, ?, ?, ?)",
+    params = list(params$route_id, params$origin, params$destination, params$status)
+  )
+})
+```
+
+## Resolve → validate → execute
+
+```{r}
+resolve_action(ctx, "UpdateAirportStatus")
+```
+
+```{r}
+validate_params(ctx, "UpdateAirportStatus", list(new_status = "maintenance"))
+```
+
+```{r}
+result <- submit_action(ctx, "UpdateAirportStatus",
+  params = list(new_status = "maintenance"),
+  target_ids = "DUB"
+)
+result
+```
+
+## Dry runs
+
+Dry runs validate inputs and return an execution plan without dispatching the
+handler or recording a log entry.
+
+```{r}
+submit_action(ctx, "UpdateAirportStatus",
+  params = list(new_status = "closed"),
+  target_ids = "JFK",
+  .dry_run = TRUE
+)
+```
+
+## Logs
+
+Every successful or failed execution is recorded in the `_action_log` table.
+
+```{r}
+action_log(ctx)
+```
+
+## Validation errors
+
+Unknown parameters are rejected before execution.
+
+```{r}
+try(submit_action(ctx, "UpdateAirportStatus",
+  params = list(wrong_param = "oops"),
+  target_ids = "DUB"
+))
+```
+
+## Policy checks
+
+```{r}
+ctx <- register_policy(ctx, function(action, params, target_ids) {
+  if (params$new_status == "closed") {
+    rlang::abort("Policy denied: airports cannot be closed during demo")
+  }
+  TRUE
+})
+
+try(submit_action(ctx, "UpdateAirportStatus",
+  params = list(new_status = "closed"),
+  target_ids = "DUB"
+))
+```
+
+```{r}
+DBI::dbDisconnect(con, shutdown = TRUE)
+```
