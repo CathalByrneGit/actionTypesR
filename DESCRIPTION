@@ -3,7 +3,7 @@ Type: Package
 Title: Action Orchestration and Submission Lifecycle Engine
 Version: 0.1.0
 Authors@R: c(
-    person("OpenAI", "Codex", role = c("aut", "cre"), email = "noreply@example.com")
+    person("Cathal", "Byrne", role = c("aut", "cre"), email = "cathal.byrne@example.com")
   )
 Description: Execute ontology-defined actions through resolution, validation,
     dispatch, and logging across R, SQL, HTTP, and plugin backends.
