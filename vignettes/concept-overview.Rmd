@@ -120,7 +120,7 @@ submit_action(ctx, "UpdateAirportStatus",
 
 ## Logs
 
-Every successful or failed execution is recorded in the `_action_log` table.
+Every successful or failed execution is recorded in the `action_log` table.
 
 ```{r}
 action_log(ctx)
@@ -139,6 +139,9 @@ try(submit_action(ctx, "UpdateAirportStatus",
 
 ## Policy checks
 
+Policy functions receive `(action, params, target_ids, ctx)`. A 3-argument form
+is also accepted for backward compatibility — it is wrapped automatically.
+
 ```{r}
 ctx <- register_policy(ctx, function(action, params, target_ids) {
   if (params$new_status == "closed") {
@@ -151,6 +154,57 @@ try(submit_action(ctx, "UpdateAirportStatus",
   params = list(new_status = "closed"),
   target_ids = "DUB"
 ))
+```
+
+## Approval gates
+
+An approval gate sits between the policy check and dispatch. The gate function
+returns `"approved"`, `"denied"`, or `"pending"`. When `"pending"` is returned
+the action is logged with `status = "pending_approval"` and no handler is called.
+
+```{r}
+# Reset policy so we can demonstrate the gate in isolation
+ctx$policy_fn <- NULL
+
+ctx <- register_approval_gate(ctx, function(action, params, target_ids, ctx) {
+  if (identical(params$new_status, "maintenance")) {
+    return("pending")   # requires human approval
+  }
+  "approved"
+})
+
+result <- submit_action(ctx, "UpdateAirportStatus",
+  params = list(new_status = "maintenance"),
+  target_ids = "DUB"
+)
+result$status   # "pending_approval"
+
+# An approved action dispatches normally
+result2 <- submit_action(ctx, "UpdateAirportStatus",
+  params = list(new_status = "active"),
+  target_ids = "DUB"
+)
+result2$status  # "success"
+```
+
+## Resubmitting a logged action
+
+`resubmit_action()` looks up any prior submission by `submission_id` and
+re-executes it, generating a fresh `submission_id`. The original log row is
+never modified.
+
+```{r}
+second <- resubmit_action(ctx, result2$submission_id)
+second$status  # "success"
+```
+
+## Log summary
+
+`action_summary()` aggregates the log by action type and status, with optional
+`action_type_id` and `since` filters.
+
+```{r}
+action_summary(ctx)
 ```
 
 ```{r}
