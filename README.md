@@ -13,6 +13,7 @@ validation, execution, and logging.
 - Policy hooks for authorization checks (3-arg legacy form supported).
 - Approval gate hook for governance integration (approved / denied / pending).
 - HTTP dispatch with configurable timeout and retry.
+- Post-submit hooks (used by machineryR to fire action-triggered transitions).
 - Replay any logged submission with `resubmit_action()`.
 - Aggregated log summary via `action_summary()`.
 
@@ -29,8 +30,8 @@ remotes::install_local("path/to/actionTypesR")
 library(ontologySpecR)
 library(actionTypesR)
 
-# Load the aviation ontology bundle
-bundle <- read_bundle(system.file("examples", "aviation-demo.json", package = "ontologySpecR"))
+# Load the aviation ontology bundle (any ontologySpecR bundle, list or JSON path works)
+bundle <- spec_example_bundle()
 
 # Connect to a database (DuckDB used here for demo)
 con <- DBI::dbConnect(duckdb::duckdb())
@@ -95,6 +96,7 @@ DBI::dbDisconnect(con, shutdown = TRUE)
 - `register_handler(ctx, action_type_id, fn)`
 - `register_policy(ctx, policy_fn)` — 3-arg `(action, params, target_ids)` or 4-arg `(..., ctx)`
 - `register_approval_gate(ctx, gate_fn)` — returns `"approved"`, `"denied"`, or `"pending"`
+- `register_post_submit_hook(ctx, fn)` — `fn(action_type_id, target_ids, submission_id)`
 
 ## Approval gate
 
@@ -116,6 +118,23 @@ result <- submit_action(ctx, "UpdateAirportStatus",
 )
 result$status  # "pending_approval"
 ```
+
+## Post-submit hooks
+
+Hooks run after an action has been dispatched and logged successfully. This is
+how machineryR's `mac_wire_actions()` fires action-triggered transitions.
+
+```r
+ctx <- register_post_submit_hook(ctx, function(action_type_id, target_ids, submission_id) {
+  message("Submitted ", action_type_id, " for ", paste(target_ids, collapse = ", "))
+})
+```
+
+- `target_ids` is a character vector (empty if the action had no targets).
+- Hooks do **not** run for dry runs, handler errors, policy/gate denials, or
+  actions left `pending_approval`. `resubmit_action()` does run them.
+- A hook that errors never fails the submission: it raises a warning and adds a
+  `hook_error` row (same `submission_id`) to `action_log`.
 
 ## Resubmitting logged actions
 

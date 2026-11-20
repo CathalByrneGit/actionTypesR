@@ -1,8 +1,6 @@
-library(ontologySpecR)
-
 test_that("submit_action executes R handlers", {
   skip_if_not_installed("duckdb")
-  bundle <- read_bundle(system.file("examples", "aviation-demo.json", package = "ontologySpecR"))
+  bundle <- ontologySpecR::spec_example_bundle()
   con <- DBI::dbConnect(duckdb::duckdb())
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
 
@@ -30,21 +28,24 @@ test_that("submit_action executes R handlers", {
 
 test_that("submit_action executes SQL handlers", {
   skip_if_not_installed("duckdb")
-  bundle <- read_bundle(system.file("examples", "aviation-demo.json", package = "ontologySpecR"))
-  sql_action <- action_type(
+  sql_action <- ontologySpecR::action_type(
     id = "UpdateAirportStatusSql",
     targets = c("Airport"),
     parameters = list(
-      parameter_def(id = "new_status", type = "string", required = TRUE),
-      parameter_def(id = "airport_id", type = "string", required = TRUE)
+      ontologySpecR::parameter_def(id = "new_status", type = "string", required = TRUE),
+      ontologySpecR::parameter_def(id = "airport_id", type = "string", required = TRUE)
     ),
-    effects = list(effect_def(kind = "update", object_type_id = "Airport", notes = "")),
+    effects = list(ontologySpecR::effect_def(kind = "update", object_type_id = "Airport", notes = "")),
     impl_kind = "sql",
     impl_entrypoint = "UPDATE airports SET status = ? WHERE airport_id = ?",
     policy = list(),
     extensions = list()
   )
-  bundle$actions <- c(bundle$actions, list(sql_action))
+  bundle <- ontologySpecR::bundle(
+    bundle_id = "aviation-sql",
+    bundle_version = "0.1.0",
+    actions = list(sql_action)
+  )
 
   con <- DBI::dbConnect(duckdb::duckdb())
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
@@ -69,7 +70,7 @@ test_that("submit_action executes SQL handlers", {
 
 test_that("policy rejection halts submission", {
   skip_if_not_installed("duckdb")
-  bundle <- read_bundle(system.file("examples", "aviation-demo.json", package = "ontologySpecR"))
+  bundle <- ontologySpecR::spec_example_bundle()
   con <- DBI::dbConnect(duckdb::duckdb())
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
 
@@ -86,7 +87,7 @@ test_that("policy rejection halts submission", {
 
 test_that("handler errors are recorded", {
   skip_if_not_installed("duckdb")
-  bundle <- read_bundle(system.file("examples", "aviation-demo.json", package = "ontologySpecR"))
+  bundle <- ontologySpecR::spec_example_bundle()
   con <- DBI::dbConnect(duckdb::duckdb())
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
 
