@@ -1,9 +1,7 @@
-library(ontologySpecR)
-
 # ── Helper ────────────────────────────────────────────────────────────────────
 
 make_ctx <- function(con) {
-  bundle <- read_bundle(system.file("examples", "aviation-demo.json", package = "ontologySpecR"))
+  bundle <- ontologySpecR::spec_example_bundle()
   action_context(bundle, con)
 }
 
@@ -78,7 +76,7 @@ test_that("action_context stores custom http_timeout and http_retries", {
   con <- DBI::dbConnect(duckdb::duckdb())
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
 
-  bundle <- read_bundle(system.file("examples", "aviation-demo.json", package = "ontologySpecR"))
+  bundle <- ontologySpecR::spec_example_bundle()
   ctx <- action_context(bundle, con, http_timeout = 60L, http_retries = 5L)
   expect_equal(ctx$http_timeout, 60L)
   expect_equal(ctx$http_retries, 5L)
@@ -245,4 +243,156 @@ test_that("action_summary filters by since", {
   future <- as.POSIXct("2099-01-01", tz = "UTC")
   empty  <- action_summary(ctx, since = future)
   expect_equal(nrow(empty), 0L)
+})
+
+# ── Post-submit hooks ────────────────────────────────────────────────────────
+
+test_that("post-submit hook receives action type, targets and submission id", {
+  skip_if_not_installed("duckdb")
+  con <- DBI::dbConnect(duckdb::duckdb())
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+  seed_airports(con)
+
+  seen <- NULL
+  ctx <- make_ctx_with_handler(con)
+  ctx <- register_post_submit_hook(ctx, function(action_type_id, target_ids, submission_id) {
+    seen <<- list(action_type_id = action_type_id, target_ids = target_ids,
+                  submission_id = submission_id)
+  })
+
+  result <- submit_action(ctx, "UpdateAirportStatus",
+                          list(new_status = "closed"), target_ids = "DUB")
+
+  expect_equal(seen$action_type_id, "UpdateAirportStatus")
+  expect_identical(seen$target_ids, "DUB")
+  expect_equal(seen$submission_id, result$submission_id)
+})
+
+test_that("post-submit hooks run after the log row is written and in order", {
+  skip_if_not_installed("duckdb")
+  con <- DBI::dbConnect(duckdb::duckdb())
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+  seed_airports(con)
+
+  order <- character()
+  logged_when_hook_ran <- NA
+  ctx <- make_ctx_with_handler(con)
+  ctx <- register_post_submit_hook(ctx, function(action_type_id, target_ids, submission_id) {
+    order <<- c(order, "first")
+    logged_when_hook_ran <<- nrow(action_log(ctx)) == 1L
+  })
+  ctx <- register_post_submit_hook(ctx, function(...) order <<- c(order, "second"))
+
+  submit_action(ctx, "UpdateAirportStatus", list(new_status = "closed"), target_ids = "DUB")
+  expect_equal(order, c("first", "second"))
+  expect_true(logged_when_hook_ran)
+})
+
+test_that("a failing hook warns, is logged, and does not fail the submission", {
+  skip_if_not_installed("duckdb")
+  con <- DBI::dbConnect(duckdb::duckdb())
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+  seed_airports(con)
+
+  later_hook_ran <- FALSE
+  ctx <- make_ctx_with_handler(con)
+  ctx <- register_post_submit_hook(ctx, function(...) stop("hook boom"))
+  ctx <- register_post_submit_hook(ctx, function(...) later_hook_ran <<- TRUE)
+
+  expect_warning(
+    result <- submit_action(ctx, "UpdateAirportStatus",
+                            list(new_status = "closed"), target_ids = "DUB"),
+    "hook boom"
+  )
+  expect_equal(result$status, "success")
+  expect_true(later_hook_ran)
+
+  log <- action_log(ctx)
+  expect_true(all(c("success", "hook_error") %in% log$status))
+  expect_match(log$error_message[log$status == "hook_error"], "hook boom")
+  expect_equal(length(unique(log$submission_id)), 1L)
+})
+
+test_that("hooks do not run for dry runs, handler errors, denial or pending", {
+  skip_if_not_installed("duckdb")
+  con <- DBI::dbConnect(duckdb::duckdb())
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+  seed_airports(con)
+
+  calls <- 0L
+  hook <- function(...) calls <<- calls + 1L
+
+  ctx <- make_ctx_with_handler(con)
+  ctx <- register_post_submit_hook(ctx, hook)
+  submit_action(ctx, "UpdateAirportStatus", list(new_status = "closed"),
+                target_ids = "DUB", .dry_run = TRUE)
+
+  failing <- register_handler(ctx, "UpdateAirportStatus",
+                              function(connection, action, params, target_ids) stop("Boom"))
+  expect_error(submit_action(failing, "UpdateAirportStatus",
+                             list(new_status = "closed"), target_ids = "DUB"), "Action failed")
+
+  rejected <- register_policy(ctx, function(action, params, target_ids) rlang::abort("no"))
+  expect_error(submit_action(rejected, "UpdateAirportStatus",
+                             list(new_status = "closed"), target_ids = "DUB"), "no")
+
+  denied <- register_approval_gate(ctx, function(action, params, target_ids, ctx) "denied")
+  expect_error(submit_action(denied, "UpdateAirportStatus",
+                             list(new_status = "closed"), target_ids = "DUB"), "denied")
+
+  pending <- register_approval_gate(ctx, function(action, params, target_ids, ctx) "pending")
+  submit_action(pending, "UpdateAirportStatus", list(new_status = "closed"), target_ids = "DUB")
+
+  expect_equal(calls, 0L)
+})
+
+test_that("resubmit_action runs hooks with a new submission id", {
+  skip_if_not_installed("duckdb")
+  con <- DBI::dbConnect(duckdb::duckdb())
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+  seed_airports(con)
+
+  ids <- character()
+  ctx <- make_ctx_with_handler(con)
+  ctx <- register_post_submit_hook(ctx, function(action_type_id, target_ids, submission_id) {
+    ids <<- c(ids, submission_id)
+  })
+
+  first <- submit_action(ctx, "UpdateAirportStatus",
+                         list(new_status = "closed"), target_ids = "DUB")
+  second <- resubmit_action(ctx, first$submission_id)
+
+  expect_equal(ids, c(first$submission_id, second$submission_id))
+})
+
+test_that("register_post_submit_hook rejects non-functions", {
+  skip_if_not_installed("duckdb")
+  con <- DBI::dbConnect(duckdb::duckdb())
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+  expect_error(register_post_submit_hook(make_ctx(con), "nope"), "must be a function")
+})
+
+# ── Spec accessors ───────────────────────────────────────────────────────────
+
+test_that("action_context normalises legacy bundles through as_bundle()", {
+  skip_if_not_installed("duckdb")
+  con <- DBI::dbConnect(duckdb::duckdb())
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+
+  raw <- list(
+    bundleId = "legacy", bundleVersion = "0.1.0", specVersion = "0.1.0",
+    actionTypes = list(list(
+      action_id = "Legacy", targets = list("Airport"), parameters = list(),
+      implementation = list(kind = "r", entrypoint = "legacy")
+    ))
+  )
+  ctx <- suppressWarnings(action_context(raw, con))
+  expect_equal(resolve_action(ctx, "Legacy")$id, "Legacy")
+})
+
+test_that("resolve_action errors on unknown ids", {
+  skip_if_not_installed("duckdb")
+  con <- DBI::dbConnect(duckdb::duckdb())
+  on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
+  expect_error(resolve_action(make_ctx(con), "Nope"), "Unknown action type")
 })

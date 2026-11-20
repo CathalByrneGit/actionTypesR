@@ -59,8 +59,8 @@ submit_action <- function(ctx, action_type_id, params, target_ids = NULL, .dry_r
   error_message <- NULL
   result        <- NULL
 
-  impl_kind       <- action$impl_kind %||% action$implementation$kind
-  impl_entrypoint <- action$impl_entrypoint %||% action$implementation$entrypoint
+  impl_kind       <- action$implementation$kind
+  impl_entrypoint <- action$implementation$entrypoint
 
   tryCatch({
     result <- dispatch_action(
@@ -97,6 +97,8 @@ submit_action <- function(ctx, action_type_id, params, target_ids = NULL, .dry_r
     rlang::abort(paste0("Action failed: ", error_message))
   }
 
+  run_post_submit_hooks(ctx, action_type_id, target_ids, submission_id, params)
+
   ActionResult(
     submission_id  = submission_id,
     action_type_id = action_type_id,
@@ -105,6 +107,42 @@ submit_action <- function(ctx, action_type_id, params, target_ids = NULL, .dry_r
     error          = error_message,
     timestamp      = completed_at
   )
+}
+
+# Run each registered post-submit hook. A failing hook becomes a warning and a
+# `hook_error` row in the action log; it never fails the submission.
+run_post_submit_hooks <- function(ctx, action_type_id, target_ids, submission_id, params) {
+  hook_targets <- as.character(unlist(target_ids))
+  for (hook in ctx$post_submit_hooks) {
+    tryCatch(
+      hook(action_type_id, hook_targets, submission_id),
+      error = function(err) {
+        msg <- conditionMessage(err)
+        warning(
+          "Post-submit hook failed for ", action_type_id, " (", submission_id, "): ", msg,
+          call. = FALSE
+        )
+        tryCatch(
+          record_action_log(
+            ctx$connection,
+            list(
+              submission_id   = submission_id,
+              action_type_id  = action_type_id,
+              params_json     = jsonlite::toJSON(params %||% list(), auto_unbox = TRUE),
+              target_ids_json = jsonlite::toJSON(target_ids %||% list(), auto_unbox = TRUE),
+              status          = "hook_error",
+              error_message   = msg,
+              submitted_at    = Sys.time(),
+              completed_at    = Sys.time(),
+              submitted_by    = na_if_null(Sys.info()[["user"]], NA_character_)
+            )
+          ),
+          error = function(e) NULL
+        )
+      }
+    )
+  }
+  invisible(NULL)
 }
 
 #' Re-submit a previously logged action
@@ -120,7 +158,7 @@ submit_action <- function(ctx, action_type_id, params, target_ids = NULL, .dry_r
 resubmit_action <- function(ctx, submission_id) {
   row <- DBI::dbGetQuery(
     ctx$connection,
-    "SELECT * FROM action_log WHERE submission_id = ? LIMIT 1",
+    "SELECT * FROM action_log WHERE submission_id = ? AND status <> 'hook_error' LIMIT 1",
     params = list(submission_id)
   )
   if (nrow(row) == 0L) {
@@ -156,7 +194,7 @@ dispatch_action <- function(ctx, action, impl_kind, impl_entrypoint, params, tar
 }
 
 dispatch_r <- function(ctx, action, impl_entrypoint, params, target_ids) {
-  handler <- ctx$handlers[[get_action_id(action)]]
+  handler <- ctx$handlers[[action$id]]
   if (is.null(handler)) {
     handler <- ctx$registry[[impl_entrypoint]]
   }
@@ -189,7 +227,7 @@ dispatch_http <- function(impl_entrypoint, params, target_ids,
 }
 
 dispatch_plugin <- function(ctx, action, impl_entrypoint, params, target_ids) {
-  handler <- ctx$handlers[[get_action_id(action)]]
+  handler <- ctx$handlers[[action$id]]
   if (is.null(handler)) {
     handler <- ctx$registry[[impl_entrypoint]]
   }

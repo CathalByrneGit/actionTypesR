@@ -1,6 +1,7 @@
 #' Create an action execution context
 #'
-#' @param bundle An ontologySpecR bundle or compatible list.
+#' @param bundle An ontologySpecR bundle, or anything
+#'   `ontologySpecR::as_bundle()` accepts (a list or a path to a JSON file).
 #' @param connection A DBI connection.
 #' @param registry Optional named list of R handlers by entrypoint.
 #' @param http_timeout Timeout in seconds for HTTP dispatch (default 30).
@@ -9,9 +10,7 @@
 #' @export
 action_context <- function(bundle, connection, registry = NULL,
                            http_timeout = 30L, http_retries = 3L) {
-  actions <- as_action_list(bundle)
-  action_ids <- vapply(actions, get_action_id, character(1))
-  action_index <- stats::setNames(actions, action_ids)
+  bundle <- ontologySpecR::as_bundle(bundle)
 
   ensure_action_log_table(connection)
 
@@ -22,7 +21,7 @@ action_context <- function(bundle, connection, registry = NULL,
     handlers = list(),
     policy_fn = NULL,
     gate_fn = NULL,
-    actions = action_index,
+    post_submit_hooks = list(),
     http_timeout = http_timeout,
     http_retries = http_retries
   )
@@ -37,9 +36,5 @@ action_context <- function(bundle, connection, registry = NULL,
 #' @return The resolved action type object.
 #' @export
 resolve_action <- function(ctx, action_type_id) {
-  action <- ctx$actions[[action_type_id]]
-  if (is.null(action)) {
-    rlang::abort(paste0("Unknown action type: ", action_type_id))
-  }
-  action
+  ontologySpecR::bundle_action_type(ctx$bundle, action_type_id)
 }

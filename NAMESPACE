@@ -8,6 +8,7 @@ export(action_summary)
 export(register_handler)
 export(register_policy)
 export(register_approval_gate)
+export(register_post_submit_hook)
 export(ActionResult)
 
 S3method(print,ActionResult)

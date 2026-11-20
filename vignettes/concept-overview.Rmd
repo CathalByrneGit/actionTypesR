@@ -25,7 +25,7 @@ DuckDB database to show the full flow.
 library(ontologySpecR)
 library(actionTypesR)
 
-bundle <- read_bundle(system.file("examples", "aviation-demo.json", package = "ontologySpecR"))
+bundle <- spec_example_bundle()
 con <- DBI::dbConnect(duckdb::duckdb())
 
 DBI::dbWriteTable(con, "airports", data.frame(

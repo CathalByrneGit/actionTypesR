@@ -1,8 +1,6 @@
-library(ontologySpecR)
-
 test_that("action_log records submissions", {
   skip_if_not_installed("duckdb")
-  bundle <- read_bundle(system.file("examples", "aviation-demo.json", package = "ontologySpecR"))
+  bundle <- ontologySpecR::spec_example_bundle()
   con <- DBI::dbConnect(duckdb::duckdb())
   on.exit(DBI::dbDisconnect(con, shutdown = TRUE), add = TRUE)
 
