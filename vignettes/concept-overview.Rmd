@@ -41,21 +41,9 @@ DBI::dbWriteTable(con, "airports", data.frame(
 
 ## Register handlers
 
-The aviation bundle includes `UpdateAirportStatus`, which is implemented in R. We can
-register a handler directly in the context.
-
-```{r}
-ctx <- action_context(bundle, con)
-
-ctx <- register_handler(ctx, "UpdateAirportStatus", function(conn, action, params, target_ids) {
-  DBI::dbExecute(conn,
-    "UPDATE airports SET status = ? WHERE airport_id = ?",
-    params = list(params$new_status, target_ids[[1]])
-  )
-})
-```
-
-We can also add a new action that creates flight routes.
+The aviation bundle includes `UpdateAirportStatus`, which is implemented in R. We
+can also add a new action that creates flight routes. Extend the bundle first,
+because a context is built from the bundle as it is at that moment.
 
 ```{r}
 create_route_action <- action_type(
@@ -75,9 +63,21 @@ create_route_action <- action_type(
 )
 
 bundle$actions <- c(bundle$actions, list(create_route_action))
+```
+
+Now build the context and register an R handler for each action.
+
+```{r}
 ctx <- action_context(bundle, con)
 
 DBI::dbExecute(con, "CREATE TABLE routes (route_id TEXT, origin TEXT, destination TEXT, status TEXT)")
+
+ctx <- register_handler(ctx, "UpdateAirportStatus", function(conn, action, params, target_ids) {
+  DBI::dbExecute(conn,
+    "UPDATE airports SET status = ? WHERE airport_id = ?",
+    params = list(params$new_status, target_ids[[1]])
+  )
+})
 
 ctx <- register_handler(ctx, "CreateFlightRoute", function(conn, action, params, target_ids) {
   DBI::dbExecute(conn,
@@ -185,6 +185,49 @@ result2 <- submit_action(ctx, "UpdateAirportStatus",
   target_ids = "DUB"
 )
 result2$status  # "success"
+```
+
+## Post-submit hooks
+
+Hooks run after an action has been dispatched and logged successfully. They
+receive `(action_type_id, target_ids, submission_id)`, with `target_ids` as a
+character vector. This is the mechanism machineryR uses to fire
+action-triggered process transitions.
+
+Hooks do not run for dry runs, handler errors, policy or gate denials, or
+actions left `pending_approval`. `resubmit_action()` does run them.
+
+```{r}
+ctx <- register_post_submit_hook(ctx, function(action_type_id, target_ids, submission_id) {
+  cat("Hook ran:", action_type_id, "on", paste(target_ids, collapse = ", "), "\n")
+})
+
+invisible(submit_action(ctx, "UpdateAirportStatus",
+  params = list(new_status = "active"),
+  target_ids = "DUB"
+))
+```
+
+A failing hook never fails the submission. It raises a warning and adds a
+`hook_error` row, sharing the same `submission_id`, to the action log.
+
+```{r}
+ctx <- register_post_submit_hook(ctx, function(...) stop("downstream system offline"))
+
+res <- withCallingHandlers(
+  submit_action(ctx, "UpdateAirportStatus",
+    params = list(new_status = "active"),
+    target_ids = "DUB"
+  ),
+  warning = function(w) {
+    cat("Warning:", conditionMessage(w), "\n")
+    invokeRestart("muffleWarning")
+  }
+)
+res$status
+
+log <- action_log(ctx)
+log[log$status == "hook_error", c("action_type_id", "status", "error_message")]
 ```
 
 ## Resubmitting a logged action
